@@ -197,7 +197,7 @@ void load_methods() {
 }
 
 void load_banner(char *dest, int size) {
-    FILE *fp = fopen("assets/tanxio/tanxio.txt", "r");
+    FILE *fp = fopen("assets/tanxio.txt", "r");
     if (!fp) {
         strcpy(dest, "");
         return;
