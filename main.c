@@ -196,54 +196,36 @@ void load_methods() {
     free(content);
 }
 
-void load_banner(char *dest, int size) {
-    FILE *fp = fopen("assets/tanxio.txt", "r");
-    if (!fp) {
-        strcpy(dest, "");
-        return;
-    }
-    char line[256];
-    int offset = 0;
-    while (fgets(line, sizeof(line), fp) && offset < size - 100) {
-        strcat(dest, "  ");
-        strcat(dest, line);
-        offset += strlen(line) + 2;
-    }
-    fclose(fp);
-}
-
 void print_banner(int client_fd) {
-    char buffer[8192];
-    char banner[4096] = {0};
-    
-    load_banner(banner, sizeof(banner));
-    
-    int len = sprintf(buffer, "\e[2J\e[H");
-    len += sprintf(buffer + len, "\e[41m");
-    len += sprintf(buffer + len, "\n%s", banner);
-    len += sprintf(buffer + len, "\e[0m");
-    len += sprintf(buffer + len, "\n");
-    len += sprintf(buffer + len, "  \e[1mUsername: \e[0m");
+    char buffer[4096];
+    int len = sprintf(buffer, 
+        "\e[2J\e[H"
+        "\e[41m"
+        "\n  ╔══════════════════════════════════════════════════╗\n"
+        "  ║                                                  ║\n"
+        "  ║              \e[1;37mTANXIO CNC\e[0m                      ║\n"
+        "  ║                                                  ║\n"
+        "  ╚══════════════════════════════════════════════════╝\e[0m\n"
+        "\n  \e[1mUsername: \e[0m"
+    );
     
     send(client_fd, buffer, len, 0);
 }
 
 void print_logged_in(int client_fd, char *username) {
-    char buffer[8192];
-    char banner[8192] = {0};
-    int len = 0;
-    
-    load_banner(banner, sizeof(banner));
-    
-    len += sprintf(buffer + len, "\e[2J\e[H");
-    len += sprintf(buffer + len, "\e[41m");
-    len += sprintf(buffer + len, "\n%s", banner);
-    len += sprintf(buffer + len, "\e[0m");
-    len += sprintf(buffer + len, "\n");
-    len += sprintf(buffer + len, "  \e[1;32m[✓]\e[0m Login successful as \e[1;35m%s\e[0m\n", username);
-    len += sprintf(buffer + len, "\n");
-    len += sprintf(buffer + len, "  Type \e[1;35m!help\e[0m for available commands\n");
-    len += sprintf(buffer + len, "\n");
+    char buffer[4096];
+    int len = sprintf(buffer, 
+        "\e[2J\e[H"
+        "\e[41m"
+        "\n  ╔══════════════════════════════════════════════════╗\n"
+        "  ║                                                  ║\n"
+        "  ║              \e[1;37mTANXIO CNC\e[0m                      ║\n"
+        "  ║                                                  ║\n"
+        "  ╚══════════════════════════════════════════════════╝\e[0m\n"
+        "\n  \e[1;32m[✓]\e[0m Login successful as \e[1;35m%s\e[0m\n"
+        "\n  Type \e[1;35m!help\e[0m for available commands\n"
+        "\n", username
+    );
     
     send(client_fd, buffer, len, 0);
 }
