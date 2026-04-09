@@ -229,8 +229,8 @@ void print_banner(int client_fd) {
 }
 
 void print_logged_in(int client_fd, char *username) {
-    char buffer[4096];
-    char banner[4096] = {0};
+    char buffer[8192];
+    char banner[8192] = {0};
     int len = 0;
     
     load_banner(banner, sizeof(banner));
